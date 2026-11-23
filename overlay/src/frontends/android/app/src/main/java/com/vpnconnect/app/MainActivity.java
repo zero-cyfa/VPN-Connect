@@ -20,6 +20,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
 import android.os.SystemClock;
+import android.os.storage.StorageManager;
 import android.provider.DocumentsContract;
 import android.text.Editable;
 import android.text.TextUtils;
@@ -73,8 +74,11 @@ public class MainActivity extends Activity implements VpnController.Listener {
 
     private static final String[] WHATSAPP_PACKAGES = {"com.whatsapp", "com.whatsapp.w4b"};
     /** Where WhatsApp keeps received documents: under Android/media since Android 11, else in the storage root. */
-    private static final String WHATSAPP_DOCS_NEW = "primary:Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents";
-    private static final String WHATSAPP_DOCS_OLD = "primary:WhatsApp/Media/WhatsApp Documents";
+    private static final String WHATSAPP_DOCS_NEW = "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents";
+    private static final String WHATSAPP_DOCS_OLD = "WhatsApp/Media/WhatsApp Documents";
+    /** Makes the picker show internal storage; some phones hide it, and then ignore the start folder. */
+    private static final String EXTRA_SHOW_ADVANCED = "android.provider.extra.SHOW_ADVANCED";
+    private static final String EXTRA_SHOW_ADVANCED_OLD = "android.content.extra.SHOW_ADVANCED";
     private static final String STORAGE_PROVIDER = "com.android.externalstorage.documents";
     private static final String PREFS_IMPORT = "vc_import";
     /** Folder the user allowed once for "Browse WhatsApp Documents" (a document tree URI). */
@@ -338,16 +342,51 @@ public class MainActivity extends Activity implements VpnController.Listener {
     }
 
     private void openWhatsAppFolderPicker() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-        if (Build.VERSION.SDK_INT >= 26) {
-            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri(
-                    STORAGE_PROVIDER, Build.VERSION.SDK_INT >= 30 ? WHATSAPP_DOCS_NEW : WHATSAPP_DOCS_OLD));
+        String path = Build.VERSION.SDK_INT >= 30 ? WHATSAPP_DOCS_NEW : WHATSAPP_DOCS_OLD;
+        Intent intent = null;
+        if (Build.VERSION.SDK_INT >= 29) {
+            intent = treeIntentFromStorageVolume(path);
         }
+        if (intent == null) {
+            intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            if (Build.VERSION.SDK_INT >= 26) {
+                intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
+                        DocumentsContract.buildDocumentUri(STORAGE_PROVIDER, "primary:" + path));
+            }
+        }
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        intent.putExtra(EXTRA_SHOW_ADVANCED, true);
+        intent.putExtra(EXTRA_SHOW_ADVANCED_OLD, true);
         try {
             startActivityForResult(intent, REQ_WHATSAPP_FOLDER);
         } catch (ActivityNotFoundException e) {
             Toast.makeText(this, R.string.vc_no_file_picker, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * Android 10+: start from the folder picker intent the storage volume itself hands out (it
+     * names the right storage root, which some phones require), and point its start folder at
+     * the WhatsApp folder on that root.
+     */
+    @SuppressLint("NewApi")
+    @SuppressWarnings("deprecation")
+    private Intent treeIntentFromStorageVolume(String path) {
+        try {
+            StorageManager sm = (StorageManager) getSystemService(STORAGE_SERVICE);
+            if (sm == null) {
+                return null;
+            }
+            Intent intent = sm.getPrimaryStorageVolume().createOpenDocumentTreeIntent();
+            Parcelable root = intent.getParcelableExtra(DocumentsContract.EXTRA_INITIAL_URI);
+            if (root instanceof Uri) {
+                // .../root/primary  ->  .../document/primary%3AAndroid%2Fmedia%2F...
+                String start = root.toString().replace("/root/", "/document/") + "%3A" + Uri.encode(path);
+                intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(start));
+            }
+            return intent;
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 
