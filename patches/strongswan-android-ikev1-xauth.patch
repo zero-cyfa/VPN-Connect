@@ -14,8 +14,8 @@ index 3e883bc..674252f 100644
  
 -        versionCode 96
 -        versionName "2.6.2"
-+        versionCode 3
-+        versionName "0.3"
++        versionCode 4
++        versionName "0.3.1"
  
          externalNativeBuild {
              ndkBuild {

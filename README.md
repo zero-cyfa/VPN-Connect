@@ -9,7 +9,7 @@ makes on Windows.
 ## Download
 
 The APK package is attached to each release on the repository's **Releases** page
-(e.g. `VpnConnect-v0.3.apk`). Download it on the phone, open it, and allow "Install unknown apps" if asked.
+(e.g. `VpnConnect-v0.3.1.apk`). Download it on the phone, open it, and allow "Install unknown apps" if asked.
 
 ## Linux
 
