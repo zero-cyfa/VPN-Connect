@@ -16,12 +16,15 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Parcelable;
 import android.os.SystemClock;
+import android.provider.DocumentsContract;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.text.format.DateUtils;
 import android.view.LayoutInflater;
+import android.view.Menu;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -60,6 +63,14 @@ public class MainActivity extends Activity implements VpnController.Listener {
     private static final int MENU_HELP = 3;
     private static final int MENU_ABOUT = 4;
     private static final int MENU_QUIT = 5;
+    private static final int MENU_IMPORT_FILE = 6;
+    private static final int MENU_IMPORT_WHATSAPP = 7;
+    private static final int MENU_IMPORT_BROWSE_WHATSAPP = 8;
+
+    private static final String[] WHATSAPP_PACKAGES = {"com.whatsapp", "com.whatsapp.w4b"};
+    /** Where WhatsApp keeps received documents: under Android/media since Android 11, else in the storage root. */
+    private static final String WHATSAPP_DOCS_NEW = "primary:Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents";
+    private static final String WHATSAPP_DOCS_OLD = "primary:WhatsApp/Media/WhatsApp Documents";
 
     private enum Ui { IDLE, CONNECTING, CONNECTED, DISCONNECTING, ERROR }
 
@@ -192,7 +203,7 @@ public class MainActivity extends Activity implements VpnController.Listener {
         requestNotificationPermission();
         logStartup();
         if (savedInstanceState == null) {
-            handleViewIntent(getIntent());
+            handleIncomingIntent(getIntent());
         }
     }
 
@@ -200,7 +211,7 @@ public class MainActivity extends Activity implements VpnController.Listener {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        handleViewIntent(intent);
+        handleIncomingIntent(intent);
     }
 
     @Override
@@ -233,12 +244,80 @@ public class MainActivity extends Activity implements VpnController.Listener {
 
     // ------------------------------------------------------------------ importing
 
-    private void openPicker() {
+    private void addImportItems(Menu menu) {
+        menu.add(0, MENU_IMPORT_FILE, 0, R.string.vc_import_choose_file);
+        menu.add(0, MENU_IMPORT_WHATSAPP, 1, R.string.vc_import_from_whatsapp);
+        menu.add(0, MENU_IMPORT_BROWSE_WHATSAPP, 2, R.string.vc_import_browse_whatsapp);
+    }
+
+    /** @return true if the id was one of the import choices. */
+    private boolean onImportItem(int id) {
+        switch (id) {
+            case MENU_IMPORT_FILE:
+                openPicker(null);
+                return true;
+            case MENU_IMPORT_WHATSAPP:
+                showWhatsAppGuide();
+                return true;
+            case MENU_IMPORT_BROWSE_WHATSAPP:
+                openPicker(Build.VERSION.SDK_INT >= 30 ? WHATSAPP_DOCS_NEW : WHATSAPP_DOCS_OLD);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** The header's Import button offers the same choices as the ⋮ menu's "Import connection". */
+    private void showImportMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        addImportItems(menu.getMenu());
+        menu.setOnMenuItemClickListener(item -> onImportItem(item.getItemId()));
+        menu.show();
+    }
+
+    /**
+     * @param startFolder storage document id the picker should open in (only a hint: Android 8+,
+     *                    and some phones ignore it), or null for the picker's usual start
+     */
+    private void openPicker(String startFolder) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        startActivityForResult(intent, REQ_IMPORT);
+        if (startFolder != null && Build.VERSION.SDK_INT >= 26) {
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri(
+                    "com.android.externalstorage.documents", startFolder));
+        }
+        try {
+            startActivityForResult(intent, REQ_IMPORT);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(this, R.string.vc_no_file_picker, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showWhatsAppGuide() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.vc_whatsapp_title)
+                .setMessage(R.string.vc_whatsapp_steps)
+                .setPositiveButton(R.string.vc_open_whatsapp, (d, w) -> openWhatsApp())
+                .setNegativeButton(R.string.vc_cancel, null)
+                .show();
+    }
+
+    private void openWhatsApp() {
+        for (String pkg : WHATSAPP_PACKAGES) {
+            Intent launch = new Intent(Intent.ACTION_MAIN);
+            launch.addCategory(Intent.CATEGORY_LAUNCHER);
+            launch.setPackage(pkg);
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try {
+                startActivity(launch);
+                return;
+            } catch (ActivityNotFoundException ignored) {
+                // try the next one (WhatsApp Business)
+            }
+        }
+        Toast.makeText(this, R.string.vc_whatsapp_missing, Toast.LENGTH_LONG).show();
     }
 
     @Override
@@ -269,22 +348,80 @@ public class MainActivity extends Activity implements VpnController.Listener {
         }
     }
 
-    private void handleViewIntent(Intent intent) {
-        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null) {
+    /** Files opened with ("Open with") or shared to the app, e.g. from WhatsApp or a file manager. */
+    private void handleIncomingIntent(Intent intent) {
+        if (intent == null || intent.getAction() == null) {
             return;
         }
+        String action = intent.getAction();
         List<Uri> uris = new ArrayList<>();
-        uris.add(intent.getData());
+        String text = null;
+        if (Intent.ACTION_VIEW.equals(action)) {
+            if (intent.getData() != null) {
+                uris.add(intent.getData());
+            }
+        } else if (Intent.ACTION_SEND.equals(action) || Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            uris.addAll(sharedUris(intent));
+            if (uris.isEmpty()) {
+                text = intent.getStringExtra(Intent.EXTRA_TEXT);
+            }
+        } else {
+            return;
+        }
+        // Handled once: don't import again when the screen is recreated.
         intent.setAction(null);
         intent.setData(null);
-        runImport(uris);
+
+        if (!uris.isEmpty()) {
+            runImport(uris);
+        } else if (text != null && !text.trim().isEmpty()) {
+            showImportResult(Importer.importText(this, text));
+        } else {
+            showImportResult(new Importer.Result(getString(R.string.vc_file_unreadable), false));
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static List<Uri> sharedUris(Intent intent) {
+        List<Uri> uris = new ArrayList<>();
+        ClipData clip = intent.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri u = clip.getItemAt(i).getUri();
+                if (u != null && !uris.contains(u)) {
+                    uris.add(u);
+                }
+            }
+        }
+        if (!uris.isEmpty()) {
+            return uris;
+        }
+        if (Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())) {
+            ArrayList<Parcelable> list = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            if (list != null) {
+                for (Parcelable p : list) {
+                    if (p instanceof Uri && !uris.contains(p)) {
+                        uris.add((Uri) p);
+                    }
+                }
+            }
+        } else {
+            Parcelable p = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (p instanceof Uri) {
+                uris.add((Uri) p);
+            }
+        }
+        return uris;
     }
 
     private void runImport(List<Uri> uris) {
         if (uris.isEmpty()) {
             return;
         }
-        Importer.Result result = Importer.importAll(this, uris);
+        showImportResult(Importer.importAll(this, uris));
+    }
+
+    private void showImportResult(Importer.Result result) {
         events.add(result.message.replace("\n\n", " "), result.ok);
         authMode = false;
         render();
@@ -391,7 +528,7 @@ public class MainActivity extends Activity implements VpnController.Listener {
         if (e == null) {
             headerName.setText(R.string.app_name);
             setSub(getString(R.string.vc_no_connections), R.color.vc_sub_gray);
-            setAction(R.string.vc_import_short, v -> openPicker());
+            setAction(R.string.vc_import_short, this::showImportMenu);
             return;
         }
         // Title line: app name until something is imported, then the imported file's name.
@@ -632,16 +769,18 @@ public class MainActivity extends Activity implements VpnController.Listener {
 
     private void showMenu(View anchor) {
         PopupMenu menu = new PopupMenu(this, anchor);
-        menu.getMenu().add(0, MENU_IMPORT, 0, R.string.vc_menu_import);
+        addImportItems(menu.getMenu().addSubMenu(0, MENU_IMPORT, 0, R.string.vc_menu_import));
         menu.getMenu().add(0, MENU_LOG, 1, R.string.vc_menu_log);
         menu.getMenu().add(0, MENU_HELP, 2, R.string.vc_menu_help);
         menu.getMenu().add(0, MENU_ABOUT, 3, R.string.vc_menu_about);
         menu.getMenu().add(0, MENU_QUIT, 4, R.string.vc_menu_quit);
         menu.setOnMenuItemClickListener(item -> {
+            if (onImportItem(item.getItemId())) {
+                return true;
+            }
             switch (item.getItemId()) {
                 case MENU_IMPORT:
-                    openPicker();
-                    break;
+                    return false; // let the submenu open
                 case MENU_LOG:
                     startActivity(new Intent(this, LogActivity.class));
                     break;

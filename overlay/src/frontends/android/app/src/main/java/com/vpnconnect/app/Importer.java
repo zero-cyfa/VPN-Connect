@@ -63,6 +63,12 @@ final class Importer {
         return new Result(out.toString(), allOk);
     }
 
+    /** Imports a profile whose contents were shared as text rather than as a file. */
+    static Result importText(Context ctx, String text) {
+        String s = text.trim();
+        return importScx(ctx, s.startsWith("﻿") ? s.substring(1) : s, null);
+    }
+
     private static Result importScx(Context ctx, String text, String fileName) {
         ScxFile scx;
         try {
@@ -110,7 +116,9 @@ final class Importer {
         }
         entry.name = scx.name;
         entry.gateway = scx.gateway;
-        entry.fileName = fileName;
+        if (fileName != null) {
+            entry.fileName = fileName;
+        }
         entry.networks.clear();
         entry.networks.addAll(scx.networks);
         entry.profileUuid = profile.getUUID().toString();
