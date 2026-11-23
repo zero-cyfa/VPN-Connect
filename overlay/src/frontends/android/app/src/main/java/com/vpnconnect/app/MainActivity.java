@@ -6,7 +6,9 @@ import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Intent;
+import android.content.UriPermission;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.graphics.Typeface;
@@ -43,6 +45,7 @@ import org.strongswan.android.logic.VpnStateService.State;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -58,6 +61,7 @@ public class MainActivity extends Activity implements VpnController.Listener {
     private static final int REQ_IMPORT = 1001;
     private static final int REQ_NOTIFICATIONS = 1002;
     private static final int REQ_VPN_PERMISSION = 1003;
+    private static final int REQ_WHATSAPP_FOLDER = 1004;
     private static final int MENU_IMPORT = 1;
     private static final int MENU_LOG = 2;
     private static final int MENU_HELP = 3;
@@ -71,6 +75,12 @@ public class MainActivity extends Activity implements VpnController.Listener {
     /** Where WhatsApp keeps received documents: under Android/media since Android 11, else in the storage root. */
     private static final String WHATSAPP_DOCS_NEW = "primary:Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents";
     private static final String WHATSAPP_DOCS_OLD = "primary:WhatsApp/Media/WhatsApp Documents";
+    private static final String STORAGE_PROVIDER = "com.android.externalstorage.documents";
+    private static final String PREFS_IMPORT = "vc_import";
+    /** Folder the user allowed once for "Browse WhatsApp Documents" (a document tree URI). */
+    private static final String PREF_WHATSAPP_TREE = "whatsapp_docs_tree";
+    private static final int SCAN_DEPTH = 3;
+    private static final int SCAN_MAX = 200;
 
     private enum Ui { IDLE, CONNECTING, CONNECTED, DISCONNECTING, ERROR }
 
@@ -254,13 +264,13 @@ public class MainActivity extends Activity implements VpnController.Listener {
     private boolean onImportItem(int id) {
         switch (id) {
             case MENU_IMPORT_FILE:
-                openPicker(null);
+                openPicker();
                 return true;
             case MENU_IMPORT_WHATSAPP:
                 showWhatsAppGuide();
                 return true;
             case MENU_IMPORT_BROWSE_WHATSAPP:
-                openPicker(Build.VERSION.SDK_INT >= 30 ? WHATSAPP_DOCS_NEW : WHATSAPP_DOCS_OLD);
+                browseWhatsAppDocuments();
                 return true;
             default:
                 return false;
@@ -275,24 +285,187 @@ public class MainActivity extends Activity implements VpnController.Listener {
         menu.show();
     }
 
-    /**
-     * @param startFolder storage document id the picker should open in (only a hint: Android 8+,
-     *                    and some phones ignore it), or null for the picker's usual start
-     */
-    private void openPicker(String startFolder) {
+    private void openPicker() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        if (startFolder != null && Build.VERSION.SDK_INT >= 26) {
-            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri(
-                    "com.android.externalstorage.documents", startFolder));
-        }
         try {
             startActivityForResult(intent, REQ_IMPORT);
         } catch (ActivityNotFoundException e) {
             Toast.makeText(this, R.string.vc_no_file_picker, Toast.LENGTH_LONG).show();
         }
+    }
+
+    // "Browse WhatsApp Documents": the user allows WhatsApp's documents folder once, then the app
+    // lists the .scx files in it itself, so nobody has to find the folder in the file picker.
+
+    private void browseWhatsAppDocuments() {
+        Uri tree = savedWhatsAppFolder();
+        if (tree != null) {
+            scanForScx(tree);
+        } else {
+            askForWhatsAppFolder();
+        }
+    }
+
+    /** @return the allowed folder, or null if none was allowed yet or the permission was lost. */
+    private Uri savedWhatsAppFolder() {
+        String saved = getSharedPreferences(PREFS_IMPORT, MODE_PRIVATE).getString(PREF_WHATSAPP_TREE, null);
+        if (saved == null) {
+            return null;
+        }
+        Uri uri = Uri.parse(saved);
+        for (UriPermission p : getContentResolver().getPersistedUriPermissions()) {
+            if (p.isReadPermission() && uri.equals(p.getUri())) {
+                return uri;
+            }
+        }
+        return null;
+    }
+
+    private void forgetWhatsAppFolder() {
+        getSharedPreferences(PREFS_IMPORT, MODE_PRIVATE).edit().remove(PREF_WHATSAPP_TREE).apply();
+    }
+
+    private void askForWhatsAppFolder() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.vc_wa_folder_title)
+                .setMessage(R.string.vc_wa_folder_text)
+                .setPositiveButton(R.string.vc_continue, (d, w) -> openWhatsAppFolderPicker())
+                .setNegativeButton(R.string.vc_cancel, null)
+                .show();
+    }
+
+    private void openWhatsAppFolderPicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        if (Build.VERSION.SDK_INT >= 26) {
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri(
+                    STORAGE_PROVIDER, Build.VERSION.SDK_INT >= 30 ? WHATSAPP_DOCS_NEW : WHATSAPP_DOCS_OLD));
+        }
+        try {
+            startActivityForResult(intent, REQ_WHATSAPP_FOLDER);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(this, R.string.vc_no_file_picker, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void onWhatsAppFolderChosen(Uri tree) {
+        try {
+            getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getSharedPreferences(PREFS_IMPORT, MODE_PRIVATE).edit()
+                    .putString(PREF_WHATSAPP_TREE, tree.toString()).apply();
+        } catch (SecurityException e) {
+            // still readable for now; we just ask again next time
+        }
+        scanForScx(tree);
+    }
+
+    /** An .scx file found in the allowed folder. */
+    private static final class FoundScx {
+        final String name;
+        final Uri uri;
+        final long modified;
+
+        FoundScx(String name, Uri uri, long modified) {
+            this.name = name;
+            this.uri = uri;
+            this.modified = modified;
+        }
+    }
+
+    private void scanForScx(final Uri tree) {
+        Toast.makeText(this, R.string.vc_wa_scanning, Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            List<FoundScx> found = new ArrayList<>();
+            boolean readable = true;
+            try {
+                collectScx(tree, DocumentsContract.getTreeDocumentId(tree), 0, found);
+            } catch (RuntimeException e) {
+                readable = false; // permission gone or folder deleted
+            }
+            final boolean ok = readable || !found.isEmpty();
+            ui.post(() -> {
+                if (!isFinishing() && !isDestroyed()) {
+                    showScxChoices(found, ok);
+                }
+            });
+        }, "vc-scan").start();
+    }
+
+    private void collectScx(Uri tree, String parentId, int depth, List<FoundScx> out) {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId);
+        String[] cols = {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        };
+        List<String> subfolders = new ArrayList<>();
+        try (Cursor c = getContentResolver().query(children, cols, null, null, null)) {
+            if (c == null) {
+                throw new IllegalStateException("cannot list " + children);
+            }
+            while (c.moveToNext() && out.size() < SCAN_MAX) {
+                String id = c.getString(0);
+                String name = c.getString(1);
+                String mime = c.getString(2);
+                if (id == null || name == null) {
+                    continue;
+                }
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    if (!name.startsWith(".")) {
+                        subfolders.add(id);
+                    }
+                } else if (name.toLowerCase(Locale.ROOT).endsWith(".scx")) {
+                    out.add(new FoundScx(name, DocumentsContract.buildDocumentUriUsingTree(tree, id),
+                            c.isNull(3) ? 0 : c.getLong(3)));
+                }
+            }
+        }
+        if (depth < SCAN_DEPTH) {
+            for (String id : subfolders) {
+                if (out.size() >= SCAN_MAX) {
+                    break;
+                }
+                try {
+                    collectScx(tree, id, depth + 1, out);
+                } catch (RuntimeException ignored) {
+                    // skip a subfolder we cannot read
+                }
+            }
+        }
+    }
+
+    private void showScxChoices(final List<FoundScx> found, boolean readable) {
+        if (!readable) {
+            forgetWhatsAppFolder();
+            askForWhatsAppFolder();
+            return;
+        }
+        if (found.isEmpty()) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.vc_wa_none_title)
+                    .setMessage(R.string.vc_wa_none_text)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .setNeutralButton(R.string.vc_wa_other_folder, (d, w) -> openWhatsAppFolderPicker())
+                    .show();
+            return;
+        }
+        Collections.sort(found, (a, b) -> Long.compare(b.modified, a.modified));
+        SimpleDateFormat format = new SimpleDateFormat("d MMM yyyy, h:mm a", Locale.getDefault());
+        String[] labels = new String[found.size()];
+        for (int i = 0; i < labels.length; i++) {
+            FoundScx f = found.get(i);
+            labels[i] = f.modified > 0 ? f.name + "\n" + format.format(new Date(f.modified)) : f.name;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.vc_wa_pick_title)
+                .setItems(labels, (d, which) -> runImport(Collections.singletonList(found.get(which).uri)))
+                .setNegativeButton(R.string.vc_cancel, null)
+                .setNeutralButton(R.string.vc_wa_other_folder, (d, w) -> openWhatsAppFolderPicker())
+                .show();
     }
 
     private void showWhatsAppGuide() {
@@ -304,17 +477,24 @@ public class MainActivity extends Activity implements VpnController.Listener {
                 .show();
     }
 
+    /**
+     * Uses the app's own launch intent (an explicit component). A MAIN/LAUNCHER intent with only a
+     * package set is still implicit, and startActivity() then also requires CATEGORY_DEFAULT,
+     * which launcher screens don't declare, so it always failed with "not installed".
+     */
     private void openWhatsApp() {
-        for (String pkg : WHATSAPP_PACKAGES) {
-            Intent launch = new Intent(Intent.ACTION_MAIN);
-            launch.addCategory(Intent.CATEGORY_LAUNCHER);
-            launch.setPackage(pkg);
+        PackageManager pm = getPackageManager();
+        for (String pkg : WHATSAPP_PACKAGES) { // WhatsApp, then WhatsApp Business
+            Intent launch = pm.getLaunchIntentForPackage(pkg);
+            if (launch == null) {
+                continue;
+            }
             launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             try {
                 startActivity(launch);
                 return;
-            } catch (ActivityNotFoundException ignored) {
-                // try the next one (WhatsApp Business)
+            } catch (ActivityNotFoundException | SecurityException ignored) {
+                // try the next one
             }
         }
         Toast.makeText(this, R.string.vc_whatsapp_missing, Toast.LENGTH_LONG).show();
@@ -337,6 +517,10 @@ public class MainActivity extends Activity implements VpnController.Listener {
                 uris.add(data.getData());
             }
             runImport(uris);
+        } else if (requestCode == REQ_WHATSAPP_FOLDER) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                onWhatsAppFolderChosen(data.getData());
+            }
         } else if (requestCode == REQ_VPN_PERMISSION) {
             if (resultCode == RESULT_OK) {
                 startPending();

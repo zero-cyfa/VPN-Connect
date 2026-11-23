@@ -21,6 +21,14 @@
     <string name="vc_whatsapp_steps">1. Open WhatsApp and go to the chat with the .scx file.\n2. Press and hold the file, then tap Share (under ⋮ at the top if you don’t see it).\n3. Choose VPN Connect. The connection is imported straight away.\n\nOr tap the file in the chat and choose VPN Connect to open it.</string>
     <string name="vc_open_whatsapp">Open WhatsApp</string>
     <string name="vc_whatsapp_missing">WhatsApp is not installed on this phone.</string>
+    <string name="vc_continue">Continue</string>
+    <string name="vc_wa_folder_title">Allow WhatsApp Documents</string>
+    <string name="vc_wa_folder_text">VPN Connect needs to see WhatsApp’s documents folder once. After that it lists your .scx files for you.\n\nOn the next screen, tap “Use this folder”, then “Allow”.\n\nIf it opens somewhere else, go to: Android › media › com.whatsapp › WhatsApp › Media › WhatsApp Documents (on older phones: WhatsApp › Media › WhatsApp Documents).</string>
+    <string name="vc_wa_scanning">Looking for .scx files…</string>
+    <string name="vc_wa_pick_title">Choose a connection file</string>
+    <string name="vc_wa_none_title">No .scx files found</string>
+    <string name="vc_wa_none_text">There are no .scx files in that folder yet.\n\nIn WhatsApp, open the chat and tap the .scx file once so it downloads, then try again.</string>
+    <string name="vc_wa_other_folder">Other folder</string>
 
     <string name="vc_import_short">Import</string>
     <string name="vc_no_connections">No connections</string>
@@ -77,7 +85,7 @@
     <string name="vc_import_failed">Could not save the connection.</string>
 
     <string name="vc_help_title">Help</string>
-    <string name="vc_help_body">1. Open the ⋮ menu, tap “Import connection” and choose your .scx file. If it came by WhatsApp, pick “From WhatsApp” there for the steps, or “Browse WhatsApp Documents” to pick it from WhatsApp’s folder.\n2. Select the connection, tap Connect, allow the VPN prompt, then sign in with your user name and password.\n3. Tap Disconnect when you are done.\n\nIf something fails, open the VPN log from the ⋮ menu and send it to ICT support.</string>
+    <string name="vc_help_body">1. Open the ⋮ menu, tap “Import connection” and choose your .scx file. If it came by WhatsApp, pick “From WhatsApp” there for the steps, or “Browse WhatsApp Documents” to list the .scx files WhatsApp has saved.\n2. Select the connection, tap Connect, allow the VPN prompt, then sign in with your user name and password.\n3. Tap Disconnect when you are done.\n\nIf something fails, open the VPN log from the ⋮ menu and send it to ICT support.</string>
     <string name="vc_about_title">About</string>
     <string name="vc_about_body">VPN Connect connects to IPsec VPNs on Sophos Firewall, using the Sophos Connect (.scx) file you import.\n\nVPN engine: strongSwan, licensed under GPLv2. This app is distributed under the same licence.\n\nAuthor: zero.cyfa</string>
 
