@@ -5,7 +5,7 @@ VPN Connect is an Android client for Sophos Firewall IPsec VPNs.
 ### New in v0.3: import from WhatsApp
 - **Share from WhatsApp:** in the chat, press and hold the `.scx` file, tap Share and choose VPN Connect. It is imported straight away, no folder hunting.
 - **Open from WhatsApp:** tapping the `.scx` file in a chat now offers VPN Connect.
-- **Import menu:** "Import connection" (and the Import button) now offers *Choose file…*, *From WhatsApp* (step-by-step help with an Open WhatsApp button) and *Browse WhatsApp Documents* (the file picker opens in WhatsApp's documents folder where the phone allows it).
+- **Import menu:** "Import connection" (and the Import button) now offers *Choose file…*, *From WhatsApp* (step-by-step help with an Open WhatsApp button) and *Browse WhatsApp Documents* (allow WhatsApp's documents folder once; after that the app lists the `.scx` files WhatsApp has saved, newest first, ready to tap).
 
 ### Everything else
 - Import any Sophos Connect `.scx` file from the ⋮ menu (or open it from a file manager).
