@@ -63,7 +63,7 @@ jobs:
       - name: Install the .deb (pulls in strongSwan, GTK and polkit)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ./dist/vpn-connect_*_all.deb xvfb
+          sudo apt-get install -y ./dist/vpn-connect_*_all.deb xvfb dbus
           dpkg -L vpn-connect
 
       - name: strongSwan has the plugins the tunnel needs
@@ -93,10 +93,20 @@ jobs:
           export HOME=$(mktemp -d)
           # runners set XDG_CONFIG_HOME to /home/runner/.config; use the fresh home instead
           export XDG_CONFIG_HOME="$HOME/.config" XDG_STATE_HOME="$HOME/.local/state"
-          # the import confirmation dialog keeps the app running; timeout ends it
-          xvfb-run -a timeout 8 vpn-connect /tmp/office.scx || [ $? -eq 124 ]
-          grep -q '"CI office"' "$HOME/.config/vpn-connect/connections.json"
-          stat -c '%a' "$HOME/.config/vpn-connect/connections.json" | grep -qx 600
+          # no accessibility bus on the runner; looking for one can stall GTK's startup
+          export NO_AT_BRIDGE=1
+          CONF="$HOME/.config/vpn-connect/connections.json"
+          # Own X server and session bus (without one, GApplication's D-Bus registration can hang
+          # on timeouts). The import confirmation dialog keeps the app open, so wait for the saved
+          # file (up to 60 s) rather than a fixed timeout, then close the app.
+          xvfb-run -a dbus-run-session -- vpn-connect /tmp/office.scx > "$RUNNER_TEMP/app.log" 2>&1 &
+          for i in $(seq 60); do grep -qs '"CI office"' "$CONF" && break; sleep 1; done
+          echo "waited ${i}s"
+          pkill -f 'vpn-connect /tmp/office.scx' || true
+          wait || true
+          cat "$RUNNER_TEMP/app.log"
+          grep -q '"CI office"' "$CONF" || { echo "::error::profile not imported within 60 s"; exit 1; }
+          stat -c '%a' "$CONF" | grep -qx 600
           echo "GUI started, imported the profile, file mode 0600"
 
   test-debian:
